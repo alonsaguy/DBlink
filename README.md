@@ -1,5 +1,5 @@
 # DBlink
-### Welcome to Dynamic-STORM github page
+### Welcome to DBlink github page
 Disclaimer:
 
 This repository is based on the following paper: "Dblink: Dynamic localization microscopy in super spatiotemporal resolution via deep learning".
