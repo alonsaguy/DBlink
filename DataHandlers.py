@@ -12,13 +12,23 @@ from scipy.ndimage import shift
 from scipy.ndimage import rotate
 
 # Create Data Sets
-
 def Simulate_Train_Data_060622(obs_size, dataset_size, video_length, emitters_density,
                                scale, sum_range, datatype):
+    '''
+    :param obs_size: input video height and width
+    :param dataset_size: number of images to generate
+    :param video_length: input video length
+    :param emitters_density: the percentage of structure pixels that blink in each frame
+    :param scale: the ratio between input image and the reconstruction size
+    :param sum_range: the number of frames to sum in the input video
+    :param datatype: whether this function simulate filaments or mitochondria-like structures
+    :return: Training set - paris of observation videos and ground truth videos
+    '''
+    # Initialize movement speed and rotation speed ranges
     Velocities = np.random.uniform(-0.0025*scale, 0.0025*scale, [dataset_size, 2])
     rot_speed = np.random.uniform(0.00015*scale, 0.00015*scale, dataset_size)
 
-    # Create TrainSet
+    # Initialize matrices
     Observations = np.zeros([dataset_size, int(video_length/sum_range), obs_size*scale, obs_size*scale], dtype=np.uint8)
     tmp_obs = np.zeros([dataset_size, video_length, obs_size * scale, obs_size * scale], dtype=np.uint8)
     ScaledGroundTruths = np.zeros([dataset_size, int(video_length/sum_range), obs_size*scale, obs_size*scale], dtype=np.uint8)
@@ -27,10 +37,10 @@ def Simulate_Train_Data_060622(obs_size, dataset_size, video_length, emitters_de
     print("-I- Generating training data")
     for img in tqdm(range(dataset_size)):
         if datatype == 'tubules':
-            # Generate First frame
+            # Generate first ground truth frame
             GroundTruths[img, 0, :, :] = 255 * generate_microtubules_sim(obs_size * scale, scale)
 
-            # Apply changes to images in time
+            # Apply changes to the first frame in time
             for frame in range(1, video_length):
                 tmp = apply_change(GroundTruths[img, 0], Velocities[img]*frame, rot_speed[img]*frame)[:obs_size*scale, :obs_size*scale]
                 tmp[tmp < 0.1] = 0
@@ -39,60 +49,26 @@ def Simulate_Train_Data_060622(obs_size, dataset_size, video_length, emitters_de
         elif datatype == 'mito':
             GroundTruths[img, :, :, :] = 255 * generate_mitochondria_sim(obs_size * scale, video_length)
 
+        # Take only one in every sum factor frames of the ground truth video
         for frame in range(0, video_length, sum_range):
             ScaledGroundTruths[img, int(frame/sum_range)] = GroundTruths[img, frame]
 
-        # Add light emissions at random spots
+        # Add localizations at random spots
         for frame in range(video_length):
             tmp_obs[img, frame] = add_emissions_deepSTORM(GroundTruths[img, frame], emitters_density)
 
-        for frame in range(0, video_length, sum_range):
-            Observations[img, int(frame/sum_range)] = np.sum(tmp_obs[img, frame:frame+sum_range], axis=0)
-
-    return Observations[:, :, None, :, :], ScaledGroundTruths[:, :, None, :, :]
-
-def Simulate_Train_Data_200422(obs_size, dataset_size, video_length, emitters_density,
-                               scale, sum_range, photobleaching_time):
-    Velocities = np.random.uniform(-0.01, 0.01, [dataset_size, 2])
-    rot_speed = np.random.uniform(0.005, 0.005, dataset_size)
-
-    # Create TrainSet
-    Observations = np.zeros([dataset_size, int(video_length/sum_range), obs_size*scale, obs_size*scale], dtype=np.uint8)
-    tmp_obs = np.zeros([dataset_size, video_length, obs_size * scale, obs_size * scale], dtype=np.uint8)
-    ScaledGroundTruths = np.zeros([dataset_size, int(video_length/sum_range), obs_size*scale, obs_size*scale], dtype=np.uint8)
-    GroundTruths = np.zeros([dataset_size, video_length, obs_size*scale, obs_size*scale], dtype=np.uint8)
-
-    print("-I- Generating training data")
-    for img in tqdm(range(dataset_size)):
-        # Generate First frame
-        GroundTruths[img, 0, :, :] = 255 * generate_microtubules_sim(obs_size * scale, scale) #generate_random_lines(obs_size * scale)
-
-        # Apply changes to images in time
-        for frame in range(1, video_length):
-            tmp = apply_change(GroundTruths[img, 0], Velocities[img]*frame, rot_speed[img]*frame)[:obs_size*scale, :obs_size*scale]
-            tmp[tmp < 0.1] = 0
-            GroundTruths[img, frame] = tmp
-
-        for frame in range(0, video_length, sum_range):
-            ScaledGroundTruths[img, int(frame/sum_range)] = GroundTruths[img, frame]
-
-        # Add light emissions at random spots
-        photobleaching_mask = np.ones_like(GroundTruths[0, 0])
-        for frame in range(video_length):
-            if(frame == int((np.random.uniform(-0.1, 0.1) + photobleaching_time)*video_length)):
-                photobleaching_mask = np.random.randint(0, 2, photobleaching_mask.shape)
-            tmp = apply_change(GroundTruths[img, 0] * photobleaching_mask,
-                               Velocities[img] * frame, rot_speed[img] * frame)[:obs_size * scale, :obs_size * scale]
-            tmp[tmp < 0.1] = 0
-            # Add photobleaching after a certain time
-            tmp_obs[img, frame] = add_emissions_deepSTORM(tmp, emitters_density)
-
+        # Sum the localization maps over sum_range
         for frame in range(0, video_length, sum_range):
             Observations[img, int(frame/sum_range)] = np.sum(tmp_obs[img, frame:frame+sum_range], axis=0)
 
     return Observations[:, :, None, :, :], ScaledGroundTruths[:, :, None, :, :]
 
 def add_emissions_deepSTORM(gt, emitters_density):
+    '''
+    :param gt: a ground truth frame containing ones where there is a structure and zero everywhere else
+    :param emitters_density: the percentage of pixels to mark as localization in each frame
+    :return: an observation frame corresponding to the current gt frame
+    '''
     # Initialize observation image
     obs = np.zeros_like(gt)
 
@@ -114,6 +90,7 @@ def add_emissions_deepSTORM(gt, emitters_density):
 
     if(np.sum(mask) == 0):
         return obs
+
     # Add the PSF where the emitter is located
     for i in range(num_of_emitters):
         possible_locs_size = len(np.where(mask == 1)[0])
@@ -157,30 +134,39 @@ def generate_random_lines(img_size):
     return img
 
 def generate_mitochondria_sim(img_size, vid_length):
+    '''
+    :param img_size: ground truth frame size
+    :param vid_length: ground truth video length
+    :return: a video containing random mitochondria like shapes drifting and wobbling in time
+    '''
     from skimage.draw import polygon
     # Initialize parameters
     mitochondrias = np.zeros([vid_length, img_size, img_size], dtype=np.uint8)
     min_polygon_pts, max_polygon_pts = 30, 50
-    R = 20
+    R = int(img_size/6)
     # Randomize the number of mitochondria in the FOV
     num_of_mito = np.random.randint(1, int(img_size/10))
     for i in range(num_of_mito):
         # Generate new polygon
         curr_polygon = np.zeros([2 * R + 1, 2 * R + 1])
         num_of_polygon_pts = np.random.randint(min_polygon_pts, max_polygon_pts)
+        # Add phase to the distance sinusoidal
         random_phase = np.arange(num_of_polygon_pts) * 2 * np.pi / (num_of_polygon_pts) + 2 * np.pi * np.random.uniform(0, 0.5)
-        random_range = np.random.randint(6, 12)
-        random_radius = np.random.randint(0, 3) + np.abs(random_range * np.sin(random_phase)**10)
+        # Choose amplitude of distance sinusoidal
+        random_range = np.random.randint(int(R/2), R-3)
+        # Choose radii of each edge point
+        random_radius = np.random.randint(2, 6) + np.abs(random_range * np.sin(random_phase)**20)
+        # Choose angle of each edge point
         angle = np.arange(num_of_polygon_pts) * 2 * np.pi / num_of_polygon_pts
+        # Construct polygon edge points and polygon
         polygon_pts = R + np.array(random_radius * [np.sin(angle), np.cos(angle)]).astype(int)
         rr, cc = polygon(polygon_pts[0, :], polygon_pts[1, :])
         curr_polygon[rr, cc] = 1
         # Cut the polygon patch to fit the FOV
-        bot_left_corner = np.random.randint(0, img_size - 1, 2)
+        bot_left_corner = np.random.randint(0, img_size - R, 2)
         cut_curr_patch = cut_edges(curr_polygon, bot_left_corner, img_size)
         # Simulate first mitochondria frame
-        mitochondrias[0, bot_left_corner[0]:bot_left_corner[0] + cut_curr_patch.shape[0],
-        bot_left_corner[1]:bot_left_corner[1] + cut_curr_patch.shape[1]] += cut_curr_patch
+        mitochondrias[0, bot_left_corner[0]:bot_left_corner[0] + cut_curr_patch.shape[0], bot_left_corner[1]:bot_left_corner[1] + cut_curr_patch.shape[1]] += cut_curr_patch
         # Randomize movement
         velocity = np.random.uniform(-0.05, 0.05, 2)
         num_of_moving_pts = np.random.randint(0, polygon_pts.shape[1]/2)
@@ -189,24 +175,27 @@ def generate_mitochondria_sim(img_size, vid_length):
         elon_velocity = np.random.uniform(-0.01, 0.01, [2, num_of_moving_pts])
         # Apply tranformation
         for frame in range(vid_length):
+            # Define bot left corner according to lateral shift
             new_bot_left = bot_left_corner + (velocity*frame).astype(int)
+            # Add elongation to random edge points
             curr_polygon = np.zeros([2 * R + 1, 2 * R + 1])
             polygon_pts[:, elon_ind] = original_pt + (3 * np.abs(np.sin(frame * 2*np.pi*elon_velocity))).astype(int)
-            if (np.any(cut_curr_patch.shape == 0) or np.any(new_bot_left < 0) or np.any(new_bot_left >= img_size) or
-                    np.any(polygon_pts[:, elon_ind] >= 2 * R) or np.any(polygon_pts[:, elon_ind] < 0)):
-                new_bot_left = bot_left_corner + (velocity * (frame - 1)).astype(int)
+            if (np.any(new_bot_left < 0) or np.any(new_bot_left > img_size) or np.any(polygon_pts[:, elon_ind] >= 2 * R)
+                    or np.any(polygon_pts[:, elon_ind] < 0)):
+                new_bot_left = bot_left_corner + (velocity * (frame-1)).astype(int)
                 polygon_pts[:, elon_ind] = original_pt + (3 * np.abs(np.sin((frame-1) * 2*np.pi*elon_velocity))).astype(int)
                 rr, cc = polygon(polygon_pts[0, :], polygon_pts[1, :])
                 curr_polygon[rr, cc] = 1
                 cut_curr_patch = cut_edges(curr_polygon, new_bot_left, img_size)
-                mitochondrias[frame:, new_bot_left[0]:new_bot_left[0] + cut_curr_patch.shape[0],
-                new_bot_left[1]:new_bot_left[1] + cut_curr_patch.shape[1]] += cut_curr_patch
+                mitochondrias[frame:, new_bot_left[0]:new_bot_left[0] + cut_curr_patch.shape[0], new_bot_left[1]:new_bot_left[1] + cut_curr_patch.shape[1]] += cut_curr_patch
                 break
             rr, cc = polygon(polygon_pts[0, :], polygon_pts[1, :])
             curr_polygon[rr, cc] = 1
             cut_curr_patch = cut_edges(curr_polygon, new_bot_left, img_size)
-            mitochondrias[frame, new_bot_left[0]:new_bot_left[0] + cut_curr_patch.shape[0], new_bot_left[1]:new_bot_left[1] + cut_curr_patch.shape[1]] += cut_curr_patch
-
+            if(np.any(cut_curr_patch.shape == 0)):
+                break
+            else:
+                mitochondrias[frame, new_bot_left[0]:new_bot_left[0] + cut_curr_patch.shape[0], new_bot_left[1]:new_bot_left[1] + cut_curr_patch.shape[1]] += cut_curr_patch
     return mitochondrias
 
 def generate_microtubules_sim(img_size, scale):
@@ -356,33 +345,38 @@ def refine_points(xy, Nr):
 
     return np.array(xy_refined)
 
-def draw_PSF(PSF_size, loc, amp=1, sigma=1):
-    x = np.arange(PSF_size[1])
-    y = np.arange(PSF_size[0])
-
-    random_shift = np.random.uniform(-0.25, 0.25, 2)
-    random_amp = amp + 0.1*amp*np.random.uniform(-1, 1)
-    x, y = np.meshgrid(x, y)
-    PSF = (random_amp / np.sqrt(2 * np.pi * sigma ** 2) * np.exp(
-        -((x - loc[1] - random_shift[1]) ** 2 / (2 * sigma ** 2)
-          + (y - loc[0] - random_shift[0]) ** 2 / (2 * sigma ** 2))))
-    return PSF
-
 def CreateDataLoader(X, y, batch_size):
+    '''
+    :param X: observation matrix
+    :param y: ground truth matrix
+    :param batch_size: defined batch size
+    :return: a DataLoader instance
+    '''
     data_loader = torch.utils.data.DataLoader(TensorDataset(X, y), batch_size=batch_size)
     return data_loader
 
 def apply_change(image, velocity, rot_speed):
+    '''
+    :param image: ground truth frame
+    :param velocity: the lateral shift to be applied upon the ground truth frame
+    :param rot_speed: the rotation angle to be applied upon the ground truth frame
+    :return: shifted and rotated ground truth image
+    '''
     # Apply changes to an image according to velocity
     shifted = shift(image, velocity, order=3, mode='constant')
     return rotate(shifted, rot_speed)
 
 def create_example_vid(name, obs):
+    '''
+    :param name: video name
+    :param obs: the numpy array that contains the video to generate
+    :return: None, generates a mp4 video containing obs
+    '''
     video_length = obs.shape[1]
     row = obs.shape[3]
     col = obs.shape[4]
 
-    fps = 3.33
+    fps = 5
 
     out = cv2.VideoWriter('{}.mp4'.format(name), cv2.VideoWriter_fourcc('m', 'p', '4', 'v'), fps, (col, row))
 
@@ -394,6 +388,12 @@ def create_example_vid(name, obs):
     out.release()
 
 def cut_edges(patch, bot_left_corner, img_size):
-    up = patch.shape[0] - np.max([0, bot_left_corner[0] + patch.shape[0] - img_size])
-    right = patch.shape[1] - np.max([0, bot_left_corner[1] + patch.shape[1] - img_size])
-    return patch[:up, :right].astype(np.uint)
+    '''
+    :param patch: a patch containing mitochondria structure
+    :param bot_left_corner: the position of the patch in the ground truth image
+    :param img_size: the ground truth image size
+    :return: the cropped patch such that it fits inside the ground truth image
+    '''
+    top = np.min([patch.shape[0], img_size - bot_left_corner[0]])
+    right = np.min([patch.shape[1], img_size - bot_left_corner[1]])
+    return patch[:top, :right].astype(np.uint)

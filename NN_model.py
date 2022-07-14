@@ -7,7 +7,14 @@ from torch.autograd import Variable
 import matplotlib.pyplot as plt
 from DataHandlers import *
 
+# =============================================== Loss Functions ======================================================
+
 def consistency_reg(out_vid):
+    '''
+    :param out_vid: reconstruction video
+    :return: the consistency loss - calculated by the subtraction of each pixel in every frame in its value in the
+            previous frame
+    '''
     loss_term = 0
     for i in range(1, out_vid.shape[1]):
         loss_term += torch.sum(torch.abs(out_vid[0, i] - out_vid[0, i-1]))
@@ -32,7 +39,6 @@ class TVLoss(nn.Module):
         return t.size()[1] * t.size()[-2] * t.size()[-1]
 
 # ============================================ This is working fine ===================================================
-
 class ConvBLSTM(nn.Module):
     def __init__(self, input_size, input_channels, hidden_channels, num_layers, device):
         super(ConvBLSTM, self).__init__()
@@ -51,21 +57,13 @@ class ConvBLSTM(nn.Module):
                                       nn.ReLU(),
                                       nn.Conv2d(64, 1, kernel_size=5, padding=2))
 
-    def forward(self, xforward, xreverse, hidden_fwd=None, prop_hidden=False):
+    def forward(self, xforward, xreverse):
         """
         xforward, xreverse = B T C H W tensors.
         """
 
-        hidden_bwd = None
-        '''if(hidden_fwd == None):
-            hidden_bwd = None
-        else:
-            hidden_bwd = []
-            for j in range(self.num_layers):
-                hidden_bwd.append([torch.zeros_like(hidden_fwd[0][0]), torch.zeros_like(hidden_fwd[0][0])])'''
-
-        y_out_fwd, hidden_fwd = self.forward_net(xforward, hidden_fwd, prop_hidden)
-        y_out_rev, _ = self.reverse_net(xreverse, hidden_bwd, prop_hidden)
+        y_out_fwd, hidden_fwd = self.forward_net(xforward)
+        y_out_rev, _ = self.reverse_net(xreverse)
 
         # Take only the output of the last layer
         y_out_fwd = y_out_fwd[-1]
@@ -81,10 +79,7 @@ class ConvBLSTM(nn.Module):
             curr_out.append(self.conv_net(ycat[:, j]))
         out = torch.stack(curr_out, dim=1)
 
-        if(prop_hidden):
-            return out, hidden_fwd
-        else:
-            return out, None
+        return out
 
 class ConvLSTMCell(nn.Module):
 
@@ -122,11 +117,12 @@ class ConvLSTMCell(nn.Module):
                               out_channels=4 * self.hidden_dim,
                               kernel_size=self.kernel_size,
                               padding=self.padding,
-                              bias=self.bias)
+                              bias=self.bias).to(device)
 
     def forward(self, input_tensor, cur_state):
 
         h_cur, c_cur = cur_state
+        self.conv = self.conv.to(self.device)
 
         # concatenate along channel axis
         combined = torch.cat([input_tensor, h_cur], dim=1)
@@ -180,32 +176,24 @@ class ConvLSTM(nn.Module):
                                           input_dim=cur_input_dim,
                                           hidden_dim=self.hidden_dim[i],
                                           kernel_size=self.kernel_size[i],
-                                          bias=self.bias, device=self.device))
+                                          bias=self.bias, device=self.device).to(self.device))
 
         self.cell_list = nn.ModuleList(cell_list)
 
-    def forward(self, input_tensor, hidden_state=None, prop_hidden=False):
+    def forward(self, input_tensor):
         """
         Parameters
         ----------
         input_tensor:
             5-D Tensor either of shape (t, b, c, h, w) or (b, t, c, h, w)
-        hidden_state:
-            None.
         Returns
         -------
         last_state_list, layer_output
         """
         self.input_device = input_tensor.device
         # Implement stateful ConvLSTM
-        if prop_hidden:
-            self.return_all_layers = True
-            if hidden_state == None:
-                tensor_size = (input_tensor.size(3), input_tensor.size(4))
-                hidden_state = self._init_hidden(batch_size=input_tensor.size(0), tensor_size=tensor_size)
-        else:
-            tensor_size = (input_tensor.size(3), input_tensor.size(4))
-            hidden_state = self._init_hidden(batch_size=input_tensor.size(0), tensor_size=tensor_size)
+        tensor_size = (input_tensor.size(3), input_tensor.size(4))
+        hidden_state = self._init_hidden(batch_size=input_tensor.size(0), tensor_size=tensor_size)
 
         layer_output_list = []
         last_state_list = []
@@ -253,227 +241,87 @@ class ConvLSTM(nn.Module):
             param = [param] * num_layers
         return param
 
-# =====================================================================================================================
-class ConvLSTM_DeepSTORM(nn.Module):
+# =========================================== This is in development ==================================================
+
+class ConvOverlapBLSTM(nn.Module):
+    def __init__(self, input_size, input_channels, hidden_channels, num_layers, window_size, device):
+        super(ConvOverlapBLSTM, self).__init__()
+        ''' In development'''
+        self.input_size = input_size
+        self.input_channels = input_channels
+        self.hidden_channels = hidden_channels
+        self.num_layers = num_layers
+        self.window_size = window_size
+        self.device = device
+        self.forward_net = ConvLSTM(input_size, input_channels, hidden_channels, kernel_size=(5, 5), num_layers=num_layers, device=device)
+        self.reverse_net = ConvLSTM(input_size, input_channels, hidden_channels, kernel_size=(5, 5), num_layers=num_layers, device=device)
+        self.conv_net = nn.Sequential(nn.Conv2d(2 * self.hidden_channels, 128, kernel_size=5, padding=2),
+                                      nn.ReLU(),
+                                      nn.Conv2d(128, 256, kernel_size=5, padding=2),
+                                      nn.ReLU(),
+                                      nn.Conv2d(256, 64, kernel_size=5, padding=2),
+                                      nn.ReLU(),
+                                      nn.Conv2d(64, 1, kernel_size=5, padding=2))
+
+    def forward(self, xforward, xreverse, hidden_fwd=None, prop_hidden=False):
+        """
+        xforward, xreverse = B T C H W tensors.
+        """
+
+        hidden_bwd = None
+
+        y_out_fwd, hidden_fwd = self.forward_net(xforward, hidden_fwd, prop_hidden)
+        y_out_rev, _ = self.reverse_net(xreverse, hidden_bwd, prop_hidden)
+
+        # Take only the output of the last layer
+        y_out_fwd = y_out_fwd[-1]
+        y_out_rev = y_out_rev[-1]
+
+        reversed_idx = list(reversed(range(y_out_rev.shape[1])))
+        # reverse temporal outputs.
+        y_out_rev = y_out_rev[:, reversed_idx, ...]
+        ycat = torch.cat((y_out_fwd, y_out_rev), dim=2)
+
+        if(ycat.shape[1] > int(self.window_size/2)):
+            out = self.conv_net(ycat[:, int(self.window_size/2)])
+        else:
+            out = self.conv_net(ycat[:, 0])
+
+        return out
+
+class ConvOneDirectionalLSTM(nn.Module):
     def __init__(self, input_size, input_channels, hidden_channels, num_layers, device):
-        super(ConvLSTM_DeepSTORM, self).__init__()
+        super(ConvOneDirectionalLSTM, self).__init__()
+        ''' In development'''
         self.input_size = input_size
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
         self.device = device
-
-        # Defining the layers
-        self.dl_rnn = ConvLSTM(input_size, input_channels, hidden_channels, kernel_size=(5, 5), num_layers=num_layers, device=device)
-
-        self.conv_net = nn.Sequential(nn.Conv2d(self.hidden_channels, 64, kernel_size=5, padding=2),
+        self.forward_net = ConvLSTM(input_size, input_channels, hidden_channels, kernel_size=(5, 5), num_layers=num_layers, device=device)
+        self.conv_net = nn.Sequential(nn.Conv2d(self.hidden_channels, 128, kernel_size=5, padding=2),
                                       nn.ReLU(),
-                                      nn.Conv2d(64, 256, kernel_size=5, padding=2),
+                                      nn.Conv2d(128, 256, kernel_size=5, padding=2),
                                       nn.ReLU(),
                                       nn.Conv2d(256, 64, kernel_size=5, padding=2),
                                       nn.ReLU(),
                                       nn.Conv2d(64, 1, kernel_size=5, padding=2))
-    def forward(self, x):
-        h, _ = self.dl_rnn(x)
+
+    def forward(self, xforward):
+        """
+        xforward, xreverse = B T C H W tensors.
+        """
+
+        y_out_fwd, hidden_fwd = self.forward_net(xforward)
+
+        # Take only the output of the last layer
+        y_out_fwd = y_out_fwd[-1]
+
         curr_out = []
-        for j in range(h[-1].shape[1]):
-            curr_out.append(self.conv_net(h[-1][:, j]))
+        for j in range(y_out_fwd.shape[1]):
+            curr_out.append(self.conv_net(y_out_fwd[:, j]))
         out = torch.stack(curr_out, dim=1)
+
         return out
 
-class RNN_DeepSTORM(nn.Module):
-    def __init__(self, hidden_channels, input_range, device):
-        super(RNN_DeepSTORM, self).__init__()
-        self.hidden_channels = int(hidden_channels)
-        self.input_range = input_range
-        self.device = device
-
-        # Defining the layers
-        # Dynamics path
-        self.conv_dyn = nn.Sequential(nn.Conv2d(int(2*self.input_range + 1), 256, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.Conv2d(256, 512, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.Conv2d(512, 256, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.Conv2d(256, 64, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.Conv2d(64, 1, kernel_size=3, padding=1))
-
-        # Structure path
-        self.conv_dl = nn.Sequential(nn.Conv2d(1, 64, kernel_size=5, padding=2),
-                                     nn.LeakyReLU(),
-                                     nn.Conv2d(64, 256, kernel_size=5, padding=2),
-                                     nn.LeakyReLU(),
-                                     nn.UpsamplingBilinear2d(scale_factor=2),
-                                     nn.Conv2d(256, 64, kernel_size=5, padding=2),
-                                     nn.LeakyReLU(),
-                                     nn.UpsamplingBilinear2d(scale_factor=2),
-                                     nn.Conv2d(64, 1, kernel_size=5, padding=2))
-        # hidden layers
-        self.hidden2hidden = nn.Sequential(nn.Conv2d(self.hidden_channels + 1, 128, kernel_size=3, padding=1),
-                                           nn.LeakyReLU(),
-                                           nn.MaxPool2d(kernel_size=2, stride=2),
-                                           nn.Conv2d(128, 256, kernel_size=3, padding=1),
-                                           nn.LeakyReLU(),
-                                           nn.Conv2d(256, 128, kernel_size=3, padding=1),
-                                           nn.LeakyReLU(),
-                                           nn.UpsamplingBilinear2d(scale_factor=2),
-                                           nn.Conv2d(128, self.hidden_channels, kernel_size=3, padding=1))
-
-        self.out_layer = nn.Sequential(nn.Conv2d(self.hidden_channels, 256, kernel_size=5, padding=2),
-                                       nn.LeakyReLU(),
-                                       nn.Conv2d(256, 128, kernel_size=5, padding=2),
-                                       nn.LeakyReLU(),
-                                       nn.Conv2d(128, 1, kernel_size=5, padding=2))
-
-    def forward(self, x, dl_in, hidden):
-        dyn = self.conv_dyn(x)
-        dl = self.conv_dl(dl_in)
-
-        new_hidden = self.hidden2hidden(torch.cat([hidden, dl], dim=1))
-
-        out = self.out_layer(new_hidden + dyn)
-
-        return out, new_hidden
-
-    def init_hidden(self, batch_size, hidden_dim):
-        # This method generates the first hidden state of zeros which we'll use in the forward pass
-        hidden = torch.normal(0, 1/(batch_size*self.hidden_channels*hidden_dim),[batch_size, self.hidden_channels, hidden_dim, hidden_dim])
-        # We'll send the tensor holding the hidden state to the device we specified earlier as well
-        return hidden.to(self.device)
-
-# RNN that gets as input the observed blinking events and a diffraction limited image on each frame
-class RNNandDL(nn.Module):
-    def __init__(self, hidden_channels, device):
-        super(RNNandDL, self).__init__()
-        self.hidden_channels = int(hidden_channels)
-        self.device = device
-
-        # Defining the layers
-        # input layers
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=5, padding=2)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=5, padding=2)
-        self.conv3 = nn.Conv2d(64, 256, kernel_size=5, padding=2)
-        self.conv4 = nn.Conv2d(256, 64, kernel_size=5, padding=2)
-        self.conv5 = nn.Conv2d(64, 32, kernel_size=5, padding=2)
-        self.conv6 = nn.Conv2d(32, 1, kernel_size=5, padding=2)
-
-        # diffraction limited layers
-        self.conv1dl = nn.Conv2d(1, 32, kernel_size=5, padding=2)
-        self.conv2dl = nn.Conv2d(32, 64, kernel_size=5, padding=2)
-        self.conv3dl = nn.Conv2d(64, 32, kernel_size=5, padding=2)
-        self.conv4dl = nn.Conv2d(32, 1, kernel_size=5, padding=2)
-
-        # hidden layers
-        self.hidden2hidden = nn.Sequential(nn.Conv2d(self.hidden_channels + 2, self.hidden_channels, kernel_size=5, padding=2),
-                                           nn.ReLU(),
-                                           nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size=5, padding=2))
-
-        self.hidden2out = nn.Sequential(nn.Conv2d(self.hidden_channels, 64, kernel_size=5, padding=2),
-                                        nn.ReLU(),
-                                        nn.Conv2d(64, 64, kernel_size=5, padding=2),
-                                        nn.ReLU(),
-                                        nn.Conv2d(64, 1, kernel_size=5, padding=2))
-
-        # support layers
-        self.upsamle = nn.UpsamplingBilinear2d(scale_factor=2)
-        self.relu = nn.ReLU()
-
-    def forward(self, x, dl, hidden):
-        # input to hidden state
-        x1 = self.conv1(x)
-        x2 = self.conv2(self.relu(x1))
-        x3 = self.conv3(self.relu(x2))
-        x4 = self.conv4(self.relu(x3))
-        x5 = self.conv5(self.relu(self.upsamle(x4)))
-        x6 = self.conv6(self.relu(self.upsamle(x5)))
-
-        # residual connection
-        x1_res = self.upsamle(self.upsamle(x))
-
-        # dl to hidden state
-        dl1 = self.conv1dl(dl)
-        dl2 = self.conv2dl(self.relu(dl1))
-        dl3 = self.conv3dl(self.relu(dl2))
-        dl4 = self.conv4dl(self.relu(dl3))
-
-        # combine input and dl to calculate hidden state
-        new_hidden = self.hidden2hidden(torch.cat([hidden, dl4, x6 + x1_res], dim=1))
-
-
-        # hidden to output
-        out = self.hidden2out(new_hidden)
-
-        return out, new_hidden
-
-    def init_hidden(self, batch_size, hidden_dim):
-        # This method generates the first hidden state of zeros which we'll use in the forward pass
-        hidden = torch.normal(0, 1/(batch_size*self.hidden_channels*hidden_dim),[batch_size, self.hidden_channels, hidden_dim, hidden_dim])
-        # We'll send the tensor holding the hidden state to the device we specified earlier as well
-        return hidden.to(self.device)
-
-# RNN that gets as input the observed blinking events and a diffraction limited image on each frame
-class RNN_dual_path(nn.Module):
-    def __init__(self, hidden_channels, device):
-        super(RNN_dual_path, self).__init__()
-        self.hidden_channels = int(hidden_channels)
-        self.device = device
-
-        # Defining the layers
-        # Dynamics path
-        self.conv_dyn = nn.Sequential(nn.Conv2d(11, 256, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.Conv2d(256, 512, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.Conv2d(512, 256, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.UpsamplingBilinear2d(scale_factor=2),
-                                      nn.Conv2d(256, 64, kernel_size=3, padding=1),
-                                      nn.LeakyReLU(),
-                                      nn.UpsamplingBilinear2d(scale_factor=2),
-                                      nn.Conv2d(64, 1, kernel_size=3, padding=1))
-
-        # Structure path
-        self.conv_dl = nn.Sequential(nn.Conv2d(1, 64, kernel_size=5, padding=2),
-                                     nn.LeakyReLU(),
-                                     nn.Conv2d(64, 256, kernel_size=5, padding=2),
-                                     nn.LeakyReLU(),
-                                     nn.UpsamplingBilinear2d(scale_factor=2),
-                                     nn.Conv2d(256, 64, kernel_size=5, padding=2),
-                                     nn.LeakyReLU(),
-                                     nn.UpsamplingBilinear2d(scale_factor=2),
-                                     nn.Conv2d(64, 1, kernel_size=5, padding=2))
-        # hidden layers
-        self.hidden2hidden = nn.Sequential(nn.Conv2d(self.hidden_channels + 1, 128, kernel_size=3, padding=1),
-                                           nn.LeakyReLU(),
-                                           nn.MaxPool2d(kernel_size=2, stride=2),
-                                           nn.Conv2d(128, 256, kernel_size=3, padding=1),
-                                           nn.LeakyReLU(),
-                                           nn.Conv2d(256, 128, kernel_size=3, padding=1),
-                                           nn.LeakyReLU(),
-                                           nn.UpsamplingBilinear2d(scale_factor=2),
-                                           nn.Conv2d(128, self.hidden_channels, kernel_size=3, padding=1))
-
-        self.out_layer = nn.Sequential(nn.Conv2d(self.hidden_channels, 256, kernel_size=5, padding=2),
-                                       nn.LeakyReLU(),
-                                       nn.Conv2d(256, 128, kernel_size=5, padding=2),
-                                       nn.LeakyReLU(),
-                                       nn.Conv2d(128, 1, kernel_size=5, padding=2))
-
-
-    def forward(self, x, dl_in, hidden):
-        dyn = self.conv_dyn(x)
-        dl = self.conv_dl(dl_in)
-
-        new_hidden = self.hidden2hidden(torch.cat([hidden, dl], dim=1))
-
-        out = self.out_layer(new_hidden + dyn)
-
-        return out, new_hidden
-
-    def init_hidden(self, batch_size, hidden_dim):
-        # This method generates the first hidden state of zeros which we'll use in the forward pass
-        hidden = torch.normal(0, 1/(batch_size*self.hidden_channels*hidden_dim),[batch_size, self.hidden_channels, hidden_dim, hidden_dim])
-        # We'll send the tensor holding the hidden state to the device we specified earlier as well
-        return hidden.to(self.device)
+# =====================================================================================================================
