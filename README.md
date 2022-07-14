@@ -1,6 +1,6 @@
 # DBlink
 ### Welcome to DBlink github page
-![Alt Text]()
+![Alt Text](https://github.com/alonsaguy/DBlink/blob/main/gif_recon_vs_blinks_slower.gif)
 
 Disclaimer:
 
