@@ -22,8 +22,8 @@ if not tmp_result_dir_exist:
 
 ####### Step I - Parameter Initialization #######
 # Run flags
-GenerateTrainData = False
-GenerateTestData = False
+GenerateTrainData = True
+GenerateTestData = True
 TrainNetFlag = False
 TestOnRealData = False
 
