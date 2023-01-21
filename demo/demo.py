@@ -15,6 +15,11 @@ import numpy as np
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print("Using device", device)
 
+tmp_result_dir_exist = os.path.exists("./tmp_results")
+if not tmp_result_dir_exist:
+   # Create a tmp_results dir because it does not exist
+   os.makedirs("./tmp_results")
+
 ####### Step I - Parameter Initialization #######
 # Run flags
 GenerateTrainData = False
