@@ -9,7 +9,7 @@ This repository is based on the following paper: "Dblink: Dynamic localization m
 Please also cite the original [paper](https://www.biorxiv.org/content/10.1101/2022.07.01.498428v1) when using or developing this notebook.
 
 Files description:
-* main.py - contains training and testing schemes
+* demo.py - contains training and testing schemes
 * NN_model.py - contains the pytorch model of our network
 * Trainers.py - contains the neural network trainer class
 * Data_handlers.py - contains data simulators and dataloader classes
