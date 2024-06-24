@@ -15,5 +15,3 @@ Files description:
 * Data_handlers.py - contains data simulators and dataloader classes
 * Utils.py - contains helper functions for all files
 * exp_params.py - contains the experimental parameters, e.g. pixel size, video crop position and size, etc.
-
-Note: better documented code will be available in the next weeks
