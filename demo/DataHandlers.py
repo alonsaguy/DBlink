@@ -85,7 +85,7 @@ def add_emissions_deepSTORM(gt, emitters_density):
         obs[xy[0], xy[1]] += 1
 
     # Find the mask of possible places for emitters in the image
-    mask = np.zeros_like(gt, dtype=np.int)
+    mask = np.zeros_like(gt).astype(int)
     mask[np.where(gt > 15)] = 1
 
     if(np.sum(mask) == 0):
@@ -286,32 +286,31 @@ def generate_microtubules_sim(img_size, scale):
         # save current microtubule
         paths.append(Xi)
 
-        # randomly add parallel microtubule
-        probabilities = [0.05, 0.05, 0.05, 0.1, 0.25, 0, 0.25, 0.1, 0.05, 0.05, 0.05]
-        if(np.random.uniform(0, 1) < 0.05):
-            X2i_list = []
-            shift = np.random.choice(np.arange(-5, 6), [2, 1], p=probabilities) * pixel_size / scale
-            for j in range(Xi.shape[0]):
-                if(Xi[j, 0] + shift[0] > FOV_size or Xi[j, 0] + shift[0] < 0 or
-                        Xi[j, 1] + shift[1] > FOV_size or Xi[j, 1] + shift[1] < 0):
-                    break
-                X2i_list.append(Xi[j] + shift)
-            if(len(X2i_list) > 0):
-                X2i = np.array(X2i_list)
-                paths.append(X2i)
+    # randomly add parallel microtubule
+    probabilities = [0.05, 0.05, 0.05, 0.1, 0.25, 0, 0.25, 0.1, 0.05, 0.05, 0.05]
+    if(np.random.uniform(0, 1) < 0.05):
+        X2i_list = []
+        shift = np.random.choice(np.arange(-5, 6), [2, 1], p=probabilities) * pixel_size / scale
+        for j in range(len(Xi)):
+            if(Xi[j][0] + shift[0] > FOV_size or Xi[j][0] + shift[0] < 0 or
+                    Xi[j][1] + shift[1] > FOV_size or Xi[j][1] + shift[1] < 0):
+                break
+            X2i_list.append(Xi[j] + shift)
+        if(len(X2i_list) > 0):
+            X2i = np.array(X2i_list)
+            paths.append(X2i)
 
     # plt.xlabel('x[um]')
     # plt.ylabel('y[um]')
     # plt.show()
     # decide on a refined pixel size
     refine_factor = 8
-    paths = np.array(paths)
 
     # generate resulting image
-    imtubes = np.zeros([img_size, img_size], dtype=np.uint8)
-    for i in range(paths.shape[0]):
+    imtubes = np.zeros([img_size, img_size]).astype(np.uint8)
+    for i in range(len(paths)):
         # current microtubule path
-        xy_ref = refine_points(paths[i], refine_factor)
+        xy_ref = refine_points(np.array(paths[i]), refine_factor)
         xy_tube = (xy_ref / (pixel_size / scale)).astype(int)
 
         # project locations on the grid and shift the center
