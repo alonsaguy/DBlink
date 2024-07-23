@@ -67,7 +67,8 @@ class LSTM_Trainer:
             self.optimizer.zero_grad()
 
             out = self.model(X_train, torch.flip(X_train, dims=[1]))
-
+            if len(out) == 2:
+              out = out[0]
             # Compute Loss
             loss = self.loss_fn(out, y_train) + self.lam * consistency_reg(out) + self.tv_loss(out)
 
