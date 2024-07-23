@@ -26,6 +26,7 @@ GenerateTrainData = True
 GenerateTestData = True
 TrainNetFlag = False
 TestOnRealData = False
+use_overlap = False
 
 path = r'./' # Path to model
 model_name = 'LSTM_model' # Model name
@@ -91,15 +92,17 @@ else:
 
 ####### Step V - Testing the model #######
 if(TestOnRealData):
-    analyze_storm_exp_overlap(path_to_model='./{}'.format(model_name),
+    analyze_storm_exp_overlap(path_to_model=os.path.join(path_to_model, model_name),
                               exp_class=demo_params(),
                               hidden_channels=hidden_channels,
                               num_layers=num_layers,
                               scale=scale,
-                              device=device)
+                              device=device,
+                              use_overlap=use_overlap)
     post_process_results(r'./tmp_results', 1)
+    #no_post_process_results(r'./tmp_results', 1)
 else:
-    testset_size = 4
+    testset_size = 1
     if(GenerateTestData):
         [X_test, y_test] = Simulate_Train_Data_060622(obs_size=img_size, dataset_size=testset_size,
                                                       video_length=simulated_video_length, emitters_density=density,
@@ -119,14 +122,14 @@ else:
 
     model = ConvOverlapBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels,
                                 num_layers=num_layers, device=device).to(device)
-    model.load_state_dict(torch.load(os.path.join(path, model_name), map_location=torch.device(device)))
+    model.load_state_dict(torch.load(os.path.join(path_to_model, model_name), map_location=torch.device(device)))
 
     down = torch.zeros(X_test.size(1), requires_grad=False, dtype=torch.int)
     up = torch.zeros(X_test.size(1), requires_grad=False, dtype=torch.int)
     out_ind = torch.zeros(X_test.size(1), requires_grad=False, dtype=torch.int)
     for i in range(X_test.size(1)):
-        down[i] = torch.max(torch.IntTensor([0, i - sum_factor * window_size]))
-        up[i] = torch.min(torch.IntTensor([X_test.size(1), i + sum_factor * window_size]))
+        down[i] = torch.max(torch.IntTensor([0, i - window_size]))
+        up[i] = torch.min(torch.IntTensor([X_test.size(1), i + window_size]))
         out_ind[i] = i - down[i]
 
     for i in range(X_test.size(0)):
@@ -134,9 +137,9 @@ else:
         print('Forward pass through the network')
         with torch.no_grad():
             for j in tqdm(range(X_test.shape[1])):
-                curr_out = model(X_test[i:i + 1, down[j]:up[j]:sum_factor],
-                                 torch.flip(X_test[i:i + 1, down[j]:up[j]:sum_factor], dims=[1]))
-                curr_out = curr_out.detach().cpu()[0, int(out_ind[j] / sum_factor)]
+                curr_out = model(X_test[i:i + 1, down[j]:up[j]],
+                                 torch.flip(X_test[i:i + 1, down[j]:up[j]], dims=[1]))
+                curr_out = curr_out.detach().cpu()[0, int(out_ind[j])]
                 out.append(curr_out)
 
         out = torch.stack(out, dim=1)
@@ -145,6 +148,8 @@ else:
         for j in tqdm(range(X_test.size(1))):
             curr_vid[0, j] = 255 * normalize_input_01(out[0, j].numpy())
 
+        if(y_test.shape[1]-2*window_size < 0):
+            print("Simulated video length is too short - please increase simulated video length")
         np.save('tmp_results/np_vid_{}'.format(i + 1), curr_vid[0, :-2*window_size])
         np.save('tmp_results/gt_vid_{}'.format(i + 1), y_test[i, :-2*window_size].detach().cpu().numpy())
 
