@@ -81,6 +81,36 @@ def post_process_results(path, index):
 
     print("-I- Completed vid", index)
 
+def no_post_process_results(path, index):
+    '''
+    :param path: path to npy files
+    :param index: index of generated video
+    :return: create a mp4 video representing the data in the npy files
+    '''
+    gt = np.load(os.path.join(path, 'gt_vid_{}.npy'.format(index)))
+    pred = np.load(os.path.join(path, 'np_vid_{}.npy'.format(index)))
+
+    tmp = []
+    # Create normalized network reconstructions
+    for i in tqdm(range(gt.shape[0])):
+        if (np.max(pred[i, 0, :, :]) != 0):
+            norm_recon = 255 * normalize_input_01(pred[i, 0, :, :])
+        else:
+            norm_recon = pred[i, 0] + 1e-9
+
+        # Create normalized ground truth images
+        if (np.max(gt[i, 0]) != 0):
+            norm_gt = 255 * normalize_input_01(gt[i, 0, :, :])
+        else:
+            norm_gt = gt[i, 0] + 1e-9
+
+        concat_img = np.concatenate([norm_recon, norm_gt], axis=1)
+        tmp.append(concat_img)
+
+    tmp = np.array(tmp)[None, :, None, :, :]
+    create_example_vid('tmp_results/out_vid_{}'.format(index), tmp)
+
+    print("-I- Completed vid", index)
 
 def analyze_storm_exp(path_to_model, exp_class, hidden_channels, num_layers, scale, device):
     '''
@@ -158,7 +188,7 @@ def analyze_storm_exp(path_to_model, exp_class, hidden_channels, num_layers, sca
 
         print("-I- Completed vid", i + 1)
 
-def analyze_storm_exp_overlap(path_to_model, exp_class, hidden_channels, num_layers, scale, device):
+def analyze_storm_exp_overlap(path_to_model, exp_class, hidden_channels, num_layers, scale, device, use_overlap=False):
     ''' In development '''
     # Init params from exp_params class
     img_size = exp_class.img_size
@@ -171,63 +201,102 @@ def analyze_storm_exp_overlap(path_to_model, exp_class, hidden_channels, num_lay
 
     output_threshold = 0.0
 
-    # Load localization file and transfer to image data
-    X_test = np.zeros([T * sum_factor, img_size * scale, img_size * scale])
-    for shift in tqdm(range(sum_factor)):
-        i = 0
+    if(use_overlap):
+        print("Reading csv file")
+        # Load localization file and transfer to image data
+        X_test = np.zeros([T * sum_factor, img_size * scale, img_size * scale])
+        for shift in tqdm(range(sum_factor)):
+            with open(os.path.join(dir_path, '{}.csv'.format(obs_TIF[:-4])), 'r') as read_obj:
+                csv_reader = reader(read_obj)
+                next(csv_reader) # Skip first line containing the column names
+                for my_data in csv_reader:
+                    if(int(float(my_data[0])) + shift < 0):
+                        continue
+                    if(sum_factor * int((float(my_data[0]) - 1)/sum_factor) + shift >= T*sum_factor):
+                        break
+                    if(int(float(my_data[2])*scale/pixel_size) < crop_loc[0]*scale or
+                            int(float(my_data[1])*scale/pixel_size) < crop_loc[1]*scale or
+                            int(float(my_data[2])*scale/pixel_size) >= (crop_loc[0]+img_size)*scale or
+                            int(float(my_data[1])*scale/pixel_size) >= (crop_loc[1]+img_size)*scale):
+                        continue
+                    X_test[sum_factor * int((float(my_data[0]) - 1)/sum_factor) + shift,
+                          int(float(my_data[2])*scale/pixel_size - crop_loc[0]*scale),
+                          int(float(my_data[1])*scale/pixel_size - crop_loc[1]*scale)] += 1
+
+        X_test = torch.from_numpy(X_test)
+        X_test = X_test.unsqueeze(1).unsqueeze(0)
+        X_test = X_test.type(torch.FloatTensor)
+        X_test = X_test.to(device)
+
+        N, T, C, H, W = X_test.shape
+
+        model = ConvOverlapBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels, num_layers=num_layers, device=device).to(device)
+        model.load_state_dict(torch.load(path_to_model, map_location=torch.device(device)))
+
+        down = torch.zeros(X_test.size(1), requires_grad=False, dtype=torch.int)
+        up = torch.zeros(X_test.size(1),  requires_grad=False, dtype=torch.int)
+        out_ind = torch.zeros(X_test.size(1),  requires_grad=False, dtype=torch.int)
+        for i in range(X_test.size(1)):
+            down[i] = torch.max(torch.IntTensor([0, i - sum_factor*exp_class.window_size]))
+            up[i] = torch.min(torch.IntTensor([X_test.size(1), i + sum_factor*exp_class.window_size]))
+            out_ind[i] = i - down[i]
+
+        for i in range(X_test.size(0)):
+            out = []
+            print('Feeding the input to the model')
+            with torch.no_grad():
+                for j in tqdm(range(X_test.shape[1])):
+                    curr_out = model(X_test[i:i + 1, down[j]:up[j]:sum_factor], torch.flip(X_test[i:i + 1, down[j]:up[j]:sum_factor], dims=[1]))
+                    curr_out = curr_out.detach().cpu()[0, int(out_ind[j]/sum_factor)]
+                    out.append(curr_out)
+
+            out = torch.stack(out, dim=1)
+
+            curr_vid = np.zeros([1, X_test.size(1), C, H, W])
+            for j in tqdm(range(X_test.size(1))):
+                curr_vid[0, j] = 255 * normalize_input_01(out[0, j].numpy())
+                curr_vid[0, j][np.where(curr_vid[0, j] < output_threshold * np.max(curr_vid[0, j]))] = 0
+    else:
+        # Load localization file and transfer to image data
+        X_test = np.zeros([int(np.ceil(T/sum_factor)), img_size * scale, img_size * scale])
         with open(os.path.join(dir_path, '{}.csv'.format(obs_TIF[:-4])), 'r') as read_obj:
             csv_reader = reader(read_obj)
+            next(csv_reader) # Skip first line containing the column names
             for my_data in csv_reader:
-                if(i == 0 or int(float(my_data[0])) + shift < 0):
-                    i += 1
+                if(int(float(my_data[0])) < 0):
                     continue
-                if(sum_factor * int((float(my_data[0]) - 1)/sum_factor) + shift >= T*sum_factor):
+                if(int((float(my_data[0]) - 1)) >= T):
                     break
                 if(int(float(my_data[2])*scale/pixel_size) < crop_loc[0]*scale or
                         int(float(my_data[1])*scale/pixel_size) < crop_loc[1]*scale or
                         int(float(my_data[2])*scale/pixel_size) >= (crop_loc[0]+img_size)*scale or
                         int(float(my_data[1])*scale/pixel_size) >= (crop_loc[1]+img_size)*scale):
                     continue
-                X_test[sum_factor * int((float(my_data[0]) - 1)/sum_factor) + shift,
-                       int(float(my_data[2])*scale/pixel_size - crop_loc[0]*scale),
-                       int(float(my_data[1])*scale/pixel_size - crop_loc[1]*scale)] += 1
+                X_test[int((float(my_data[0]) - 1)//sum_factor),
+                      int(float(my_data[2])*scale/pixel_size - crop_loc[0]*scale),
+                      int(float(my_data[1])*scale/pixel_size - crop_loc[1]*scale)] += 1
 
-    X_test = torch.from_numpy(X_test)
-    X_test = X_test.unsqueeze(1).unsqueeze(0)
-    X_test = X_test.type(torch.FloatTensor)
-    X_test = X_test.to(device)
+        X_test = torch.from_numpy(X_test)
+        X_test = X_test.unsqueeze(1).unsqueeze(0)
+        X_test = X_test.type(torch.FloatTensor)
+        X_test = X_test.to(device)
 
-    N, T, C, H, W = X_test.shape
+        N, T, C, H, W = X_test.shape
+        model = ConvBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels, num_layers=num_layers, device=device).to(device)
+        model.load_state_dict(torch.load(path_to_model, map_location=torch.device(device)))
 
-    model = ConvOverlapBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels, num_layers=num_layers, device=device).to(device)
-    model.load_state_dict(torch.load(path_to_model, map_location=torch.device(device)))
-
-    down = torch.zeros(X_test.size(1), requires_grad=False, dtype=torch.int)
-    up = torch.zeros(X_test.size(1),  requires_grad=False, dtype=torch.int)
-    out_ind = torch.zeros(X_test.size(1),  requires_grad=False, dtype=torch.int)
-    for i in range(X_test.size(1)):
-        down[i] = torch.max(torch.IntTensor([0, i - sum_factor*exp_class.window_size]))
-        up[i] = torch.min(torch.IntTensor([X_test.size(1), i + sum_factor*exp_class.window_size]))
-        out_ind[i] = i - down[i]
-
-    for i in range(X_test.size(0)):
-        out = []
-        print('Forward pass through the network')
+        print('Feeding the input to the model')
         with torch.no_grad():
-            for j in tqdm(range(X_test.shape[1])):
-                curr_out = model(X_test[i:i + 1, down[j]:up[j]:sum_factor], torch.flip(X_test[i:i + 1, down[j]:up[j]:sum_factor], dims=[1]))
-                curr_out = curr_out.detach().cpu()[0, int(out_ind[j]/sum_factor)]
-                out.append(curr_out)
+            curr_out, _ = model(X_test[:1], torch.flip(X_test[:1], dims=[1]))
+            curr_out = curr_out.detach().cpu()
 
-        out = torch.stack(out, dim=1)
+            curr_vid = np.zeros([1, X_test.size(1), C, H, W])
+            for j in tqdm(range(X_test.size(1))):
+                curr_vid[0, j] = 255 * normalize_input_01(curr_out[0, j].numpy())
+                curr_vid[0, j][np.where(curr_vid[0, j] < output_threshold * np.max(curr_vid[0, j]))] = 0
 
-        curr_vid = np.zeros([1, X_test.size(1), C, H, W])
-        for j in tqdm(range(X_test.size(1))):
-            curr_vid[0, j] = 255 * normalize_input_01(out[0, j].numpy())
-            curr_vid[0, j][np.where(curr_vid[0, j] < output_threshold * np.max(curr_vid[0, j]))] = 0
-
-        np.save('tmp_results/np_vid_{}'.format(i + 1), curr_vid[0])
-        np.save('tmp_results/gt_vid_{}'.format(i + 1), X_test[i, :].detach().cpu().numpy())
+        np.save('tmp_results/np_vid_1', curr_vid[0])
+        np.save('tmp_results/gt_vid_1', X_test[0, :].detach().cpu().numpy())
 
 def analyze_storm_exp_one_directional(path_to_model, exp_class, hidden_channels, num_layers, scale, device):
     ''' In development '''
