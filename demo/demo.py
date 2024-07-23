@@ -73,7 +73,7 @@ batch_size = 1
 epochs = 150
 patience = 3
 
-model = ConvOverlapBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels, num_layers=num_layers, device=device).to(device)
+model = ConvBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels, num_layers=num_layers, device=device).to(device)
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, betas=betas)
 scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, min_lr=1e-9, verbose=True)
@@ -83,10 +83,9 @@ if(TrainNetFlag):
     dl_train = CreateDataLoader(X_train, y_train, batch_size=batch_size)
     dl_val = CreateDataLoader(X_val, y_val, batch_size=batch_size)
 
-    trainer = LSTM_overlap_Trainer(model, criterion, optimizer, scheduler, batch_size, window_size=window_size,
-                                   vid_length=X_train.shape[1], patience=patience, device=device)
+    trainer = LSTM_Trainer(model, criterion, optimizer, scheduler, batch_size, patience=patience, device=device)
     trainer.fit(dl_train, dl_val, num_epochs=epochs)
-    torch.save(model.state_dict(), model_name)
+    torch.save(model.state_dict(), os.path.join(path_to_model, model_name))
 else:
     model.load_state_dict(torch.load(model_name, map_location=torch.device(device)))
 
